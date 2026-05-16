@@ -147,15 +147,139 @@ EOF
 
 ---
 
-## 📈 Estrutura Cronológica do Cenário de Teste
+## 📊 Análise de Dados e Visualização Científica
 
-O script de simulação induz variações programadas para simular padrões reais de redes de centros de dados:
+Após o encerramento do experimento de 300 segundos, você pode analisar e extrair os resultados utilizando as ferramentas integradas:
 
-1. **Fase 1 (0s - 30s):** Carga inicial leve para estabelecer a baseline de tráfego estável.
-2. **Fase 2 (30s - 60s):** Incremento linear controlado de carga em múltiplos destinos.
-3. **Fase 3 (60s - 90s):** Saturação artificial para testar a sensibilidade da métrica de *Growth Rate*.
-4. **Fase 4 (90s - 110s):** Período de silêncio para analisar o comportamento de esvaziamento de filas.
-5. **Fase 5 (110s - 170s):** Rajadas (Bursts) randômicas simulando acessos intermitentes a servidores.
-6. **Fase 6 (170s - 200s):** Sobrecarga paralela massiva para induzir perda de pacotes e saturação em 100%.
+### 1. Visualizar Resumo de Dados Completos no Terminal
+Para inspecionar rapidamente os picos máximos por link e a variação cronológica do link principal (`dp2:p1`), execute o script abaixo no terminal:
 
-Ao término dos 300 segundos, o Coletor salvará automaticamente o dataset em `./dataset` e fechará as conexões com segurança.
+```bash
+cd ~/meus-projetos-p4/metricas
+~/miniconda/envs/sdn/bin/python - << 'EOF'
+import pandas as pd
+df = pd.read_csv('dataset/run_20260515_100338.csv')
+
+print("=== RESUMO ===")
+print(f"Total de rows: {len(df)}")
+print(f"Links únicos: {df['link_id'].nunique()}")
+print(f"Duração: {round(df['timestamp'].max() - df['timestamp'].min())} segundos")
+
+print("
+=== PRIMEIRAS 5 LINHAS ===")
+print(df[['timestamp','link_id','utilization','throughput_mbps','growth_rate','tx_mbps','rx_mbps']].head())
+
+print("
+=== MÁXIMOS POR LINK ===")
+print(df.groupby('link_id')[['utilization','throughput_mbps']].max().round(2).sort_values('utilization', ascending=False))
+
+print("
+=== VARIAÇÃO TEMPORAL DO LINK dp2:p1 ===")
+dp2 = df[df['link_id']=='dp2:p1'][['timestamp','utilization','throughput_mbps','growth_rate']].copy()
+dp2['tempo_s'] = (dp2['timestamp'] - dp2['timestamp'].min()).round(0).astype(int)
+print(dp2[['tempo_s','utilization','throughput_mbps','growth_rate']].to_string(index=False))
+EOF
+```
+
+### 2. Gerar Gráficos Científicos de Desempenho
+Para plotar os gráficos de análise temporal detalhada e o comparativo multi-link, execute o seguinte gerador de gráficos:
+
+```bash
+cd ~/meus-projetos-p4/metricas
+~/miniconda/envs/sdn/bin/python - << 'EOF'
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+df = pd.read_csv('dataset/run_20260515_100338.csv')
+
+dp2 = df[df['link_id']=='dp2:p1'].copy()
+dp2['tempo_s'] = (dp2['timestamp'] - dp2['timestamp'].min()).round(1)
+dp2 = dp2[dp2['tempo_s'] >= 0].sort_values('tempo_s')
+
+fig, axes = plt.subplots(3, 1, figsize=(14, 10))
+fig.suptitle('SDN Dataset — Link dp2:p1 (ag1)
+Variação Temporal das Métricas', fontsize=14, fontweight='bold')
+
+fases = [
+    (0,   35,  '#e8f5e9', 'Fase 1
+Baixo'),
+    (35,  70,  '#fff9c4', 'Fase 2
+Médio'),
+    (70,  105, '#ffccbc', 'Fase 3
+Congestionamento'),
+    (105, 125, '#f3e5f5', 'Fase 4
+Idle'),
+    (125, 185, '#e3f2fd', 'Fase 5
+Burst variado'),
+    (185, 210, '#ffcdd2', 'Fase 6
+Cong. severo'),
+]
+
+# Ax1: Utilização
+ax1 = axes[0]
+for inicio, fim, cor, label in fases: ax1.axvspan(inicio, fim, alpha=0.3, color=cor)
+ax1.plot(dp2['tempo_s'], dp2['utilization'], color='#1565C0', linewidth=2)
+ax1.axhline(y=80, color='orange', linestyle='--', alpha=0.7, label='Alerta 80%')
+ax1.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='Saturação 100%')
+ax1.set_ylabel('Utilização (%)', fontsize=11)
+ax1.set_ylim(-5, 110)
+ax1.legend(loc='upper left', fontsize=9)
+ax1.grid(True, alpha=0.3)
+ax1.set_title('Utilização do Link', fontsize=11)
+
+# Ax2: Throughput
+ax2 = axes[1]
+for inicio, fim, cor, label in fases: ax2.axvspan(inicio, fim, alpha=0.3, color=cor)
+ax2.plot(dp2['tempo_s'], dp2['throughput_mbps'], color='#2E7D32', linewidth=2)
+ax2.set_ylabel('Throughput (Mbps)', fontsize=11)
+ax2.grid(True, alpha=0.3)
+ax2.set_title('Throughput', fontsize=11)
+
+# Ax3: Growth Rate
+ax3 = axes[2]
+for inicio, fim, cor, label in fases: ax3.axvspan(inicio, fim, alpha=0.3, color=cor)
+ax3.plot(dp2['tempo_s'], dp2['growth_rate'], color='#6A1B9A', linewidth=2)
+ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+ax3.axhline(y=3, color='red', linestyle='--', alpha=0.7, label='Alerta congestionamento')
+ax3.set_ylabel('Growth Rate (%/s)', fontsize=11)
+ax3.set_xlabel('Tempo (segundos)', fontsize=11)
+ax3.legend(loc='upper left', fontsize=9)
+ax3.grid(True, alpha=0.3)
+ax3.set_title('Taxa de Crescimento da Utilização', fontsize=11)
+
+patches = [mpatches.Patch(color=cor, alpha=0.5, label=label.replace('
+', ' ')) for _, _, cor, label in fases]
+fig.legend(handles=patches, loc='lower center', ncol=6, fontsize=9, bbox_to_anchor=(0.5, -0.02))
+plt.tight_layout(rect=[0, 0.04, 1, 1])
+plt.savefig('dataset/grafico_apresentacao.png', dpi=150, bbox_inches='tight')
+
+# Multi-link plot
+fig2, ax = plt.subplots(figsize=(12, 6))
+links_principais = ['dp2:p1', 'dp6:p2', 'dp5:p1', 'dp7:p2']
+cores = ['#1565C0', '#2E7D32', '#E65100', '#6A1B9A']
+for link, cor in zip(links_principais, cores):
+    d = df[df['link_id']==link].copy()
+    d['tempo_s'] = (d['timestamp'] - d['timestamp'].min()).round(1)
+    d = d[d['tempo_s'] >= 0].sort_values('tempo_s')
+    ax.plot(d['tempo_s'], d['utilization'], color=cor, linewidth=2, label=link)
+for inicio, fim, cor, label in fases: ax.axvspan(inicio, fim, alpha=0.15, color=cor)
+ax.set_xlabel('Tempo (segundos)', fontsize=11)
+ax.set_ylabel('Utilização (%)', fontsize=11)
+ax.set_title('SDN Dataset — Utilização por Link ao Longo do Tempo', fontsize=13, fontweight='bold')
+ax.legend(fontsize=10)
+ax.grid(True, alpha=0.3)
+ax.set_ylim(-5, 110)
+plt.tight_layout()
+plt.savefig('dataset/grafico_multilink.png', dpi=150, bbox_inches='tight')
+print("Gráficos gerados com sucesso na pasta dataset/")
+EOF
+```
+
+### 3. Visualizar as Imagens Geradas no Windows (WSL Interop)
+Como o ambiente WSL opera via terminal, você pode invocar o Visualizador de Fotos do Windows diretamente utilizando a interoperabilidade do sistema para abrir as imagens salvas:
+
+```bash
+explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_apresentacao.png)
+explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_multilink.png)
+```
