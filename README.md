@@ -149,7 +149,7 @@ EOF
 
 ## 📊 Análise de Dados e Visualização Científica
 
-Após o encerramento do experimento de 300 segundos, você pode analisar e extrair os resultados utilizando as ferramentas integradas:
+Após o encerramento do experimento de 300 segundos, você pode analisar e extrair os resultados utilizando as ferramentas integradas. **O sistema detecta e carrega automaticamente a coleta mais recente da pasta.**
 
 ### 1. Visualizar Resumo de Dados Completos no Terminal
 Para inspecionar rapidamente os picos máximos por link e a variação cronológica do link principal (`dp2:p1`), execute o script abaixo no terminal:
@@ -158,7 +158,19 @@ Para inspecionar rapidamente os picos máximos por link e a variação cronológ
 cd ~/meus-projetos-p4/metricas
 ~/miniconda/envs/sdn/bin/python - << 'EOF'
 import pandas as pd
-df = pd.read_csv('dataset/run_20260515_100338.csv')
+import glob
+import os
+
+# Encontra automaticamente o arquivo CSV mais recente da pasta dataset
+arquivos = glob.glob('dataset/run_*.csv')
+if not arquivos:
+    print('Erro: Nenhum arquivo de coleta encontrado em dataset/')
+    exit()
+ultimo_csv = max(arquivos, key=os.path.getctime)
+print(f'Carregando a coleta mais recente: {ultimo_csv}
+')
+
+df = pd.read_csv(ultimo_csv)
 
 print("=== RESUMO ===")
 print(f"Total de rows: {len(df)}")
@@ -182,7 +194,7 @@ EOF
 ```
 
 ### 2. Gerar Gráficos Científicos de Desempenho
-Para plotar os gráficos de análise temporal detalhada e o comparativo multi-link, execute o seguinte gerador de gráficos:
+Para plotar os gráficos de análise temporal detalhada e o comparativo multi-link da sua última execução, use o comando abaixo:
 
 ```bash
 cd ~/meus-projetos-p4/metricas
@@ -190,8 +202,18 @@ cd ~/meus-projetos-p4/metricas
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import glob
+import os
 
-df = pd.read_csv('dataset/run_20260515_100338.csv')
+# Encontra automaticamente o arquivo CSV mais recente
+arquivos = glob.glob('dataset/run_*.csv')
+if not arquivos:
+    print('Erro: Nenhum arquivo de coleta encontrado em dataset/')
+    exit()
+ultimo_csv = max(arquivos, key=os.path.getctime)
+print(f'Gerando gráficos para a coleta: {ultimo_csv}')
+
+df = pd.read_csv(ultimo_csv)
 
 dp2 = df[df['link_id']=='dp2:p1'].copy()
 dp2['tempo_s'] = (dp2['timestamp'] - dp2['timestamp'].min()).round(1)
@@ -272,7 +294,8 @@ ax.grid(True, alpha=0.3)
 ax.set_ylim(-5, 110)
 plt.tight_layout()
 plt.savefig('dataset/grafico_multilink.png', dpi=150, bbox_inches='tight')
-print("Gráficos gerados com sucesso na pasta dataset/")
+print("Gráficos gerados com sucesso na pasta dataset/
+")
 EOF
 ```
 
