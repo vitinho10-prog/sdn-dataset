@@ -306,3 +306,25 @@ Como o ambiente WSL opera via terminal, você pode invocar o Visualizador de Fot
 explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_apresentacao.png)
 explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_multilink.png)
 ```
+
+## Telemetria em Tempo Real
+
+Para visualizar as métricas da rede ao vivo enquanto o pipeline está rodando, abra um **Terminal 4**:
+
+```bash
+conda activate sdn
+cd ~/meus-projetos-p4/metricas
+~/miniconda/envs/sdn/bin/python telemetry.py
+```
+
+O dashboard atualiza a cada segundo e mostra:
+- Utilização de cada link (%)
+- Throughput TX e RX (Mbps)
+- Status: ✅ NORMAL / ⚠ ALTO / 🔴 CONGESTIONADO
+- Resumo geral: utilização média, máxima e throughput total
+
+A ordem de execução completa é:
+1. **Terminal 1** — Ryu (controlador)
+2. **Terminal 3** — Collector (gravação do dataset)
+3. **Terminal 2** — Mininet + tráfego
+4. **Terminal 4** — Telemetria ao vivo (opcional)
