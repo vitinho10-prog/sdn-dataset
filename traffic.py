@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-traffic.py - SDN Traffic Generator
-====================================
-Gera padrões de tráfego variados dentro do Mininet
-para produzir dados ricos para modelos LSTM/GRU.
+traffic.py - Automated SDN Traffic Generator
+=============================================
+Generates realistic, varied traffic patterns inside a Mininet network
+to produce rich training data for deep learning models.
 
-Padrões disponíveis:
-  1. background  - Tráfego baixo e constante (1-5 Mbps)
-  2. burst       - Picos curtos de alta banda (50-90 Mbps)
-  3. elephant    - Fluxos grandes e longos (30-80 Mbps)
-  4. congestion  - Congestionamento intencional do link
+Traffic Patterns:
+  1. background  - Low, steady background traffic (1-5 Mbps)
+  2. burst       - Short high-bandwidth bursts (50-90 Mbps)
+  3. elephant    - Long-duration large flows (30-80 Mbps, 30-120s)
+  4. congestion  - Deliberate congestion scenario (multiple flows saturating a link)
 
-Uso:
+Usage (inside Mininet Python API or from external script):
     from traffic import TrafficGenerator
     gen = TrafficGenerator(net)
     gen.run_scenario("congestion", duration=60)
+
+    # Or run the full benchmark sequence:
     gen.run_benchmark(total_duration=300)
+
+Standalone (requires Mininet running):
+    sudo python3 traffic.py --scenario all --duration 300
 """
 
 import argparse
@@ -33,21 +38,24 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s"
 )
 
-# ─── Configuração dos hosts ────────────────────────────────────────────────────
+# ─── Host Configuration ────────────────────────────────────────────────────────
+
+ALL_HOSTS = [f"10.0.0.{i}" for i in range(1, 9)]
 
 HOST_PAIRS = [
     ("10.0.0.1", "10.0.0.5"),
     ("10.0.0.2", "10.0.0.6"),
     ("10.0.0.3", "10.0.0.7"),
     ("10.0.0.4", "10.0.0.8"),
-    ("10.0.0.1", "10.0.0.3"),
-    ("10.0.0.2", "10.0.0.8"),
+    ("10.0.0.1", "10.0.0.3"),   # intra-pod
+    ("10.0.0.5", "10.0.0.7"),   # intra-pod (other side)
+    ("10.0.0.2", "10.0.0.8"),   # cross-pod
 ]
 
 IPERF_PORT_BASE = 5200
 
 
-# ─── Descritor de fluxo ────────────────────────────────────────────────────────
+# ─── Flow Descriptor ──────────────────────────────────────────────────────────
 
 @dataclass
 class Flow:
@@ -67,10 +75,13 @@ class Flow:
                 f"{self.bandwidth_mbps:.1f}Mbps {proto} {self.duration_sec:.0f}s")
 
 
-# ─── Executor iperf3 ───────────────────────────────────────────────────────────
+# ─── iperf3 Runner ─────────────────────────────────────────────────────────────
 
 class IperfRunner:
-    """Gerencia processos iperf3 servidor e cliente."""
+    """
+    Manages iperf3 server and client processes.
+    Servers are started once per destination host.
+    """
 
     def __init__(self, net=None):
         self.net      = net
@@ -79,7 +90,7 @@ class IperfRunner:
         self._lock    = threading.Lock()
 
     def start_server(self, host_ip: str, port: int = 5201):
-        """Inicia servidor iperf3 no host destino."""
+        """Start an iperf3 server on the given host."""
         key = (host_ip, port)
         with self._lock:
             if key in self._servers:
@@ -88,9 +99,10 @@ class IperfRunner:
         proc = self._exec_on_host(host_ip, cmd, background=True)
         with self._lock:
             self._servers[key] = proc
+        LOG.debug("iperf3 server started on %s:%d", host_ip, port)
 
     def run_client(self, flow: Flow) -> Optional[subprocess.Popen]:
-        """Inicia cliente iperf3 para o fluxo dado."""
+        """Start an iperf3 client for the given flow. Returns the process."""
         self.start_server(flow.dst, flow.port)
         time.sleep(0.2)
         cmd = [
@@ -100,17 +112,18 @@ class IperfRunner:
             "-b", f"{flow.bandwidth_mbps}M",
             "-t", str(int(flow.duration_sec)),
             "-P", str(flow.parallel),
+            "-J",
         ]
         if flow.udp:
             cmd.append("-u")
         proc = self._exec_on_host(flow.src, cmd, background=True)
         with self._lock:
             self._clients.append((flow, proc))
-        LOG.info("Fluxo iniciado: %s", flow)
+        LOG.info("Started %s", flow)
         return proc
 
     def _exec_on_host(self, host_ip: str, cmd: List[str], background=False):
-        """Executa comando no host Mininet ou via subprocess."""
+        """Execute a command on a Mininet host or via subprocess."""
         if self.net:
             host = self._get_mn_host(host_ip)
             if host:
@@ -130,7 +143,7 @@ class IperfRunner:
         return None
 
     def stop_all(self):
-        """Para todos os processos iperf3 ativos."""
+        """Kill all active iperf3 processes."""
         with self._lock:
             for _, proc in self._clients:
                 try: proc.terminate()
@@ -140,23 +153,23 @@ class IperfRunner:
                 except Exception: pass
             self._clients.clear()
             self._servers.clear()
-        LOG.info("Todos os fluxos parados.")
+        LOG.info("All iperf3 processes stopped")
 
     def cleanup_finished(self):
         with self._lock:
             self._clients = [(f, p) for f, p in self._clients if p.poll() is None]
 
 
-# ─── Construtores de cenários ──────────────────────────────────────────────────
+# ─── Traffic Scenario Generators ──────────────────────────────────────────────
 
 class ScenarioBuilder:
-    """Constrói listas de fluxos para cada cenário de tráfego."""
+    """Builds lists of Flow objects for various traffic scenarios."""
 
     @staticmethod
     def background(duration=300) -> List[Flow]:
         """
-        Tráfego de fundo: baixo e constante.
-        Simula serviços sempre ativos (monitoramento, heartbeats).
+        Low-bandwidth background noise across all pairs.
+        Simula serviços sempre ativos: monitoramento, heartbeats, DNS.
         """
         flows = []
         for i, (src, dst) in enumerate(HOST_PAIRS[:4]):
@@ -173,7 +186,7 @@ class ScenarioBuilder:
     @staticmethod
     def burst(duration=60) -> List[Flow]:
         """
-        Picos curtos de alta banda.
+        Short high-bandwidth bursts repeated throughout duration.
         Simula downloads, backups pontuais, transferências rápidas.
         """
         flows = []
@@ -199,8 +212,8 @@ class ScenarioBuilder:
     @staticmethod
     def elephant(duration=300) -> List[Flow]:
         """
-        Poucos fluxos grandes e longos.
-        Simula replicação de banco de dados, transferência de VMs.
+        Few large long-lived flows.
+        Simula replicação de banco de dados, transferência de VMs, backup contínuo.
         """
         flows = []
         for i, (src, dst) in enumerate(HOST_PAIRS[:3]):
@@ -217,7 +230,7 @@ class ScenarioBuilder:
     @staticmethod
     def congestion(duration=60) -> List[Flow]:
         """
-        Múltiplos fluxos saturando o mesmo link.
+        Multiple flows saturating the same bottleneck link.
         Simula congestionamento real em data centers.
         """
         flows = []
@@ -241,10 +254,10 @@ class ScenarioBuilder:
         return flows
 
 
-# ─── Gerador de tráfego ────────────────────────────────────────────────────────
+# ─── Traffic Generator ─────────────────────────────────────────────────────────
 
 class TrafficGenerator:
-    """Orquestra os cenários de tráfego sobre a rede Mininet."""
+    """Orchestrates multiple flow scenarios over a Mininet network."""
 
     SCENARIOS = {
         "background": ScenarioBuilder.background,
@@ -259,22 +272,22 @@ class TrafficGenerator:
         self._stop  = threading.Event()
 
     def run_scenario(self, scenario_name: str, duration: int = 120):
-        """Executa um cenário de tráfego pelo nome."""
+        """Run a named traffic scenario."""
         builder = self.SCENARIOS.get(scenario_name)
         if not builder:
             raise ValueError(
-                f"Cenário desconhecido: {scenario_name}. "
-                f"Escolha entre: {list(self.SCENARIOS.keys())}"
+                f"Unknown scenario: {scenario_name}. "
+                f"Choose from: {list(self.SCENARIOS.keys())}"
             )
         flows = builder(duration)
-        LOG.info("Cenário '%s': %d fluxos, duração=%ds",
+        LOG.info("Scenario '%s': %d flows, duration=%ds",
                  scenario_name, len(flows), duration)
         self._execute_flows(flows, duration)
 
     def run_benchmark(self, total_duration=300):
         """
-        Executa todos os cenários em sequência.
-        Divide o tempo total proporcionalmente entre os cenários.
+        Run all scenarios sequentially.
+        Time budget split among scenarios.
         """
         scenarios = [
             ("background", 0.20),   # 20% do tempo
@@ -283,21 +296,21 @@ class TrafficGenerator:
             ("congestion", 0.30),   # 30% do tempo
         ]
 
-        LOG.info("Iniciando benchmark completo: %ds total", total_duration)
+        LOG.info("Starting full benchmark: %ds total", total_duration)
 
         for name, fraction in scenarios:
             if self._stop.is_set():
                 break
             dur = int(total_duration * fraction)
-            LOG.info("=== Cenário: %s (%ds) ===", name.upper(), dur)
+            LOG.info("=== Scenario: %s (%ds) ===", name.upper(), dur)
             self.run_scenario(name, dur)
-            LOG.info("Cenário %s completo. Pausa 3s...", name)
+            LOG.info("Scenario %s complete. Cooldown 3s...", name)
             time.sleep(3)
 
-        LOG.info("Benchmark completo.")
+        LOG.info("Benchmark complete.")
 
     def _execute_flows(self, flows: List[Flow], total_duration: float):
-        """Agenda e executa fluxos com base no start_delay de cada um."""
+        """Schedule and execute flows based on their start_delay."""
         start_ts = time.time()
         threads  = []
         launched = set()
@@ -325,7 +338,7 @@ class TrafficGenerator:
                 t.join(timeout=2)
 
     def _run_flow_sync(self, flow: Flow):
-        """Executa um único fluxo de forma síncrona."""
+        """Execute a single flow synchronously."""
         try:
             proc = self.runner.run_client(flow)
             if proc:
@@ -334,14 +347,14 @@ class TrafficGenerator:
             try: proc.terminate()
             except Exception: pass
         except Exception as e:
-            LOG.debug("Erro no fluxo %s: %s", flow.name, e)
+            LOG.debug("Flow %s error: %s", flow.name, e)
 
     def stop(self):
         self._stop.set()
         self.runner.stop_all()
 
 
-# ─── Entrada CLI ───────────────────────────────────────────────────────────────
+# ─── CLI Entry Point ───────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="SDN Traffic Generator")
@@ -349,12 +362,12 @@ def main():
         "--scenario",
         default="congestion",
         choices=list(TrafficGenerator.SCENARIOS.keys()) + ["all"],
-        help="Cenário de tráfego"
+        help="Traffic scenario to run"
     )
     parser.add_argument("--duration", default=120, type=int,
-                        help="Duração em segundos")
+                        help="Duration in seconds")
     parser.add_argument("--benchmark", action="store_true",
-                        help="Executar todos os cenários em sequência")
+                        help="Run all scenarios sequentially")
     args = parser.parse_args()
 
     gen = TrafficGenerator(net=None)
@@ -365,7 +378,7 @@ def main():
         else:
             gen.run_scenario(args.scenario, duration=args.duration)
     except KeyboardInterrupt:
-        LOG.info("Interrompido pelo usuário")
+        LOG.info("Interrupted by user")
     finally:
         gen.stop()
 
