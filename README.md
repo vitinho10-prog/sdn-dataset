@@ -161,14 +161,12 @@ import pandas as pd
 import glob
 import os
 
-# Encontra automaticamente o arquivo CSV mais recente da pasta dataset
 arquivos = glob.glob('dataset/run_*.csv')
 if not arquivos:
     print('Erro: Nenhum arquivo de coleta encontrado em dataset/')
     exit()
 ultimo_csv = max(arquivos, key=os.path.getctime)
-print(f'Carregando a coleta mais recente: {ultimo_csv}
-')
+print(f'Carregando a coleta mais recente: {ultimo_csv}')
 
 df = pd.read_csv(ultimo_csv)
 
@@ -177,16 +175,13 @@ print(f"Total de rows: {len(df)}")
 print(f"Links únicos: {df['link_id'].nunique()}")
 print(f"Duração: {round(df['timestamp'].max() - df['timestamp'].min())} segundos")
 
-print("
-=== PRIMEIRAS 5 LINHAS ===")
+print("\n=== PRIMEIRAS 5 LINHAS ===")
 print(df[['timestamp','link_id','utilization','throughput_mbps','growth_rate','tx_mbps','rx_mbps']].head())
 
-print("
-=== MÁXIMOS POR LINK ===")
+print("\n=== MÁXIMOS POR LINK ===")
 print(df.groupby('link_id')[['utilization','throughput_mbps']].max().round(2).sort_values('utilization', ascending=False))
 
-print("
-=== VARIAÇÃO TEMPORAL DO LINK dp2:p1 ===")
+print("\n=== VARIAÇÃO TEMPORAL DO LINK dp2:p1 ===")
 dp2 = df[df['link_id']=='dp2:p1'][['timestamp','utilization','throughput_mbps','growth_rate']].copy()
 dp2['tempo_s'] = (dp2['timestamp'] - dp2['timestamp'].min()).round(0).astype(int)
 print(dp2[['tempo_s','utilization','throughput_mbps','growth_rate']].to_string(index=False))
@@ -205,7 +200,6 @@ import matplotlib.patches as mpatches
 import glob
 import os
 
-# Encontra automaticamente o arquivo CSV mais recente
 arquivos = glob.glob('dataset/run_*.csv')
 if not arquivos:
     print('Erro: Nenhum arquivo de coleta encontrado em dataset/')
@@ -220,25 +214,17 @@ dp2['tempo_s'] = (dp2['timestamp'] - dp2['timestamp'].min()).round(1)
 dp2 = dp2[dp2['tempo_s'] >= 0].sort_values('tempo_s')
 
 fig, axes = plt.subplots(3, 1, figsize=(14, 10))
-fig.suptitle('SDN Dataset — Link dp2:p1 (ag1)
-Variação Temporal das Métricas', fontsize=14, fontweight='bold')
+fig.suptitle('SDN Dataset — Link dp2:p1 (ag1)\nVariação Temporal das Métricas', fontsize=14, fontweight='bold')
 
 fases = [
-    (0,   35,  '#e8f5e9', 'Fase 1
-Baixo'),
-    (35,  70,  '#fff9c4', 'Fase 2
-Médio'),
-    (70,  105, '#ffccbc', 'Fase 3
-Congestionamento'),
-    (105, 125, '#f3e5f5', 'Fase 4
-Idle'),
-    (125, 185, '#e3f2fd', 'Fase 5
-Burst variado'),
-    (185, 210, '#ffcdd2', 'Fase 6
-Cong. severo'),
+    (0,   35,  '#e8f5e9', 'Fase 1\nBaixo'),
+    (35,  70,  '#fff9c4', 'Fase 2\nMédio'),
+    (70,  105, '#ffccbc', 'Fase 3\nCongestionamento'),
+    (105, 125, '#f3e5f5', 'Fase 4\nIdle'),
+    (125, 185, '#e3f2fd', 'Fase 5\nBurst variado'),
+    (185, 210, '#ffcdd2', 'Fase 6\nCong. severo'),
 ]
 
-# Ax1: Utilização
 ax1 = axes[0]
 for inicio, fim, cor, label in fases: ax1.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax1.plot(dp2['tempo_s'], dp2['utilization'], color='#1565C0', linewidth=2)
@@ -250,7 +236,6 @@ ax1.legend(loc='upper left', fontsize=9)
 ax1.grid(True, alpha=0.3)
 ax1.set_title('Utilização do Link', fontsize=11)
 
-# Ax2: Throughput
 ax2 = axes[1]
 for inicio, fim, cor, label in fases: ax2.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax2.plot(dp2['tempo_s'], dp2['throughput_mbps'], color='#2E7D32', linewidth=2)
@@ -258,7 +243,6 @@ ax2.set_ylabel('Throughput (Mbps)', fontsize=11)
 ax2.grid(True, alpha=0.3)
 ax2.set_title('Throughput', fontsize=11)
 
-# Ax3: Growth Rate
 ax3 = axes[2]
 for inicio, fim, cor, label in fases: ax3.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax3.plot(dp2['tempo_s'], dp2['growth_rate'], color='#6A1B9A', linewidth=2)
@@ -270,13 +254,11 @@ ax3.legend(loc='upper left', fontsize=9)
 ax3.grid(True, alpha=0.3)
 ax3.set_title('Taxa de Crescimento da Utilização', fontsize=11)
 
-patches = [mpatches.Patch(color=cor, alpha=0.5, label=label.replace('
-', ' ')) for _, _, cor, label in fases]
+patches = [mpatches.Patch(color=cor, alpha=0.5, label=label.replace('\n', ' ')) for _, _, cor, label in fases]
 fig.legend(handles=patches, loc='lower center', ncol=6, fontsize=9, bbox_to_anchor=(0.5, -0.02))
 plt.tight_layout(rect=[0, 0.04, 1, 1])
 plt.savefig('dataset/grafico_apresentacao.png', dpi=150, bbox_inches='tight')
 
-# Multi-link plot
 fig2, ax = plt.subplots(figsize=(12, 6))
 links_principais = ['dp2:p1', 'dp6:p2', 'dp5:p1', 'dp7:p2']
 cores = ['#1565C0', '#2E7D32', '#E65100', '#6A1B9A']
@@ -294,8 +276,7 @@ ax.grid(True, alpha=0.3)
 ax.set_ylim(-5, 110)
 plt.tight_layout()
 plt.savefig('dataset/grafico_multilink.png', dpi=150, bbox_inches='tight')
-print("Gráficos gerados com sucesso na pasta dataset/
-")
+print("Gráficos gerados com sucesso na pasta dataset/")
 EOF
 ```
 
@@ -307,7 +288,9 @@ explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_apresentac
 explorer.exe $(wslpath -w ~/meus-projetos-p4/metricas/dataset/grafico_multilink.png)
 ```
 
-## Telemetria em Tempo Real
+---
+
+## 📡 Telemetria em Tempo Real
 
 Para visualizar as métricas da rede ao vivo enquanto o pipeline está rodando, abra um **Terminal 4**:
 
@@ -323,8 +306,101 @@ O dashboard atualiza a cada segundo e mostra:
 - Status: ✅ NORMAL / ⚠ ALTO / 🔴 CONGESTIONADO
 - Resumo geral: utilização média, máxima e throughput total
 
-A ordem de execução completa é:
-1. **Terminal 1** — Ryu (controlador)
-2. **Terminal 3** — Collector (gravação do dataset)
-3. **Terminal 2** — Mininet + tráfego
-4. **Terminal 4** — Telemetria ao vivo (opcional)
+---
+
+## 📦 Captura de Tráfego em PCAP — Fluxo e Vazão
+
+Além das métricas agregadas por link (coletadas via OpenFlow), o sistema também permite capturar o **tráfego real pacote a pacote** dentro de cada host Mininet, focando na identificação de **fluxos individuais** e no cálculo da **vazão real** entre pares de hosts.
+
+### Como funciona
+
+O `pcap_collector.py` usa `nsenter` para entrar no namespace de rede de cada host Mininet e roda `tcpdump` capturando todo o tráfego que passa pela interface daquele host. Depois da captura, o script analisa os arquivos `.pcap` gerados e calcula:
+
+- **Fluxos identificados** (par de IPs + protocolo)
+- **Pacotes** por fluxo
+- **Bytes totais** transferidos
+- **Vazão (Mbps)** por fluxo
+- **Duração** de cada fluxo
+
+### 🖥️ Terminal 5 — Captura PCAP
+
+Com a rede já rodando (Terminal 1 + Terminal 2 ativos), abra um quinto terminal:
+
+```bash
+conda activate sdn
+cd ~/meus-projetos-p4/metricas
+sudo ~/miniconda/envs/sdn/bin/python pcap_collector.py --duration 60 --output-dir ./pcap
+```
+
+O script vai:
+1. Iniciar captura `tcpdump` em todos os 8 hosts simultaneamente
+2. Aguardar a duração definida (`--duration`)
+3. Parar as capturas e salvar os arquivos `.pcap`
+4. Analisar os pacotes e gerar um relatório de fluxos e vazão
+
+### Exemplo de saída
+
+```
+=================================================================
+  RELATÓRIO DE FLUXOS E VAZÃO
+=================================================================
+  Total de fluxos  : 4
+  Total de pacotes : 133,036
+  Total de bytes   : 3,655,964,680
+  Vazão total      : 729.52 Mbps
+
+  Top 10 fluxos por vazão:
+  Fluxo                                      Vazão Mbps    Pacotes           Bytes
+  ------------------------------------------------------------------------------
+  10.0.0.1 → 10.0.0.5 [TCP]                     136.30      38,677   1,057,030,246
+  10.0.0.3 → 10.0.0.7 [TCP]                     123.36      35,060     960,862,810
+  10.0.0.2 → 10.0.0.6 [TCP]                     155.55      34,737     954,154,584
+  10.0.0.4 → 10.0.0.8 [TCP]                     314.31      24,562     683,917,040
+```
+
+### Arquivos gerados (`./pcap/`)
+
+```
+pcap/
+├── h1.pcap ... h8.pcap          ← capturas brutas por host
+├── flows_<run_id>.json          ← fluxos e vazão em JSON
+└── flows_<run_id>.csv           ← mesmo dado em CSV
+```
+
+### Reanalisar PCAPs já capturados
+
+Se você já tem arquivos `.pcap` salvos e quer apenas reprocessar o relatório de fluxos sem capturar de novo, crie um arquivo `reanalyze.py` com este conteúdo:
+
+```python
+import sys
+sys.path.insert(0, '/home/beatriz/meus-projetos-p4/metricas')
+from pcap_collector import PcapAnalyzer
+from pathlib import Path
+from datetime import datetime
+
+output_dir = Path('./pcap')
+pcap_files = [(f"h{i}", output_dir / f"h{i}.pcap") for i in range(1,9)]
+pcap_files = [(h, p) for h, p in pcap_files if p.exists() and p.stat().st_size > 24]
+
+analyzer = PcapAnalyzer(output_dir)
+report = analyzer.analyze_all(pcap_files)
+analyzer.save_report(report, datetime.now().strftime("%Y%m%d_%H%M%S"))
+```
+
+E execute com:
+
+```bash
+sudo ~/miniconda/envs/sdn/bin/python reanalyze.py
+```
+
+---
+
+## 🗂️ Pipeline Completo — Resumo de Todos os Terminais
+
+| Terminal | Função |
+|----------|--------|
+| **Terminal 1** | Ryu (controlador SDN) |
+| **Terminal 3** | Collector (gravação do dataset CSV/JSONL) |
+| **Terminal 2** | Mininet + geração de tráfego (iperf3) |
+| **Terminal 4** | Telemetria ao vivo (dashboard em tempo real) — opcional |
+| **Terminal 5** | PCAP Collector (captura e análise de fluxo/vazão) — opcional |
