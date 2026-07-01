@@ -23,9 +23,9 @@ conda activate sdn
 Instale as bibliotecas necessárias para manipulação de dados, geração de gráficos e o ecossistema SDN:
 
 ```bash
-pip install pandas matplotlib ryu
+pip install pandas matplotlib ryu numpy
 ```
-*(Certifique-se de ter o Mininet e o Open vSwitch instalados no sistema).*
+*(Certifique-se de ter o Mininet, o Open vSwitch e o tshark instalados no sistema: `sudo apt install mininet openvswitch-switch tshark`).*
 
 ---
 
@@ -308,21 +308,28 @@ O dashboard atualiza a cada segundo e mostra:
 
 ---
 
-## 📦 Captura de Tráfego em PCAP — Fluxo e Vazão
+## 📦 Captura de Tráfego em Tempo Real — Janelas Temporais e Features para LSTM
 
-Além das métricas agregadas por link (coletadas via OpenFlow), o sistema também permite capturar o **tráfego real pacote a pacote** dentro de cada host Mininet, focando na identificação de **fluxos individuais** e no cálculo da **vazão real** entre pares de hosts.
+O sistema captura o **tráfego real pacote a pacote** diretamente dos hosts Mininet, usando **tshark em modo live** (sem salvar arquivo `.pcap` intermediário). Os pacotes são processados em **janelas temporais fixas de 1 segundo**, gerando uma série temporal por fluxo já pronta para treinar modelos LSTM/GRU.
 
 ### Como funciona
 
-O `pcap_collector.py` usa `nsenter` para entrar no namespace de rede de cada host Mininet e roda `tcpdump` capturando todo o tráfego que passa pela interface daquele host. Depois da captura, o script analisa os arquivos `.pcap` gerados e calcula:
+O `pcap_collector.py` entra no namespace de rede de cada host (via `nsenter`) e roda `tshark` extraindo apenas os campos necessários (`frame.time_epoch`, `ip.src`, `ip.dst`, `frame.len`, `ip.proto`) em tempo real. Cada pacote é processado imediatamente, sem etapa intermediária de gravação em disco.
 
-- **Fluxos identificados** (par de IPs + protocolo)
-- **Pacotes** por fluxo
-- **Bytes totais** transferidos
-- **Vazão (Mbps)** por fluxo
-- **Duração** de cada fluxo
+Para cada fluxo (par de IPs) e cada janela de 1 segundo, são calculadas as seguintes **features**:
 
-### 🖥️ Terminal 5 — Captura PCAP
+| Feature | Descrição |
+|---------|-----------|
+| `mbps` | Vazão (throughput) na janela |
+| `pps` | Pacotes por segundo |
+| `avg_pkt` | Tamanho médio do pacote (bytes) |
+| `std_pkt` | Desvio padrão do tamanho do pacote |
+| `tcp_ratio` | Proporção de pacotes TCP na janela |
+| `udp_ratio` | Proporção de pacotes UDP na janela |
+| `flow_count` | Número de fluxos ativos na janela (global) |
+| `active_hosts` | Número de hosts distintos ativos na janela (global) |
+
+### 🖥️ Terminal 5 — Captura em Tempo Real
 
 Com a rede já rodando (Terminal 1 + Terminal 2 ativos), abra um quinto terminal:
 
@@ -332,65 +339,97 @@ cd ~/meus-projetos-p4/metricas
 sudo ~/miniconda/envs/sdn/bin/python pcap_collector.py --duration 60 --output-dir ./pcap
 ```
 
-O script vai:
-1. Iniciar captura `tcpdump` em todos os 8 hosts simultaneamente
-2. Aguardar a duração definida (`--duration`)
-3. Parar as capturas e salvar os arquivos `.pcap`
-4. Analisar os pacotes e gerar um relatório de fluxos e vazão
+Parâmetros disponíveis:
 
-### Exemplo de saída
+```bash
+--duration   # duração da captura em segundos (padrão: 60)
+--output-dir # pasta de saída (padrão: ./pcap)
+--window     # tamanho da janela temporal em segundos (padrão: 1.0)
+--seq-len    # tamanho da janela deslizante para LSTM (padrão: 30)
+```
+
+### Exemplo de saída no terminal
 
 ```
-=================================================================
-  RELATÓRIO DE FLUXOS E VAZÃO
-=================================================================
-  Total de fluxos  : 4
-  Total de pacotes : 133,036
-  Total de bytes   : 3,655,964,680
-  Vazão total      : 729.52 Mbps
+======================================================================
+  SDN Live Traffic Collector (tshark)
+  Run ID  : 20260630_094520
+  Janela  : 1.0s
+  Seq Len : 30
+  Duração : 60s
+======================================================================
+=== Iniciando captura em tempo real (tshark) ===
+  ✓ h1 (PID=9850) [tshark live]
+  ...
+  8 capturas ativas
+Capturando por 60s (processamento em tempo real)...
+  10/60s | fluxos ativos: 0
+  ...
+  60/60s | fluxos ativos: 4
 
-  Top 10 fluxos por vazão:
-  Fluxo                                      Vazão Mbps    Pacotes           Bytes
-  ------------------------------------------------------------------------------
-  10.0.0.1 → 10.0.0.5 [TCP]                     136.30      38,677   1,057,030,246
-  10.0.0.3 → 10.0.0.7 [TCP]                     123.36      35,060     960,862,810
-  10.0.0.2 → 10.0.0.6 [TCP]                     155.55      34,737     954,154,584
-  10.0.0.4 → 10.0.0.8 [TCP]                     314.31      24,562     683,917,040
+=== Exportando dataset (4 fluxos) ===
+  ✓ Série completa salva: pcap/series_20260630_094520.json
+  ✓ CSV long salvo: pcap/flows_long_20260630_094520.csv
+  ✓ CSV wide (mbps) salvo: pcap/flows_wide_mbps_20260630_094520.csv
+  ✓ CSV wide (pps) salvo: pcap/flows_wide_pps_20260630_094520.csv
+  ✓ 10.0.0.3-10.0.0.7: X=(28, 30, 8) y=(28,)
+  ✓ 10.0.0.1-10.0.0.5: X=(28, 30, 8) y=(28,)
+  ✓ 10.0.0.2-10.0.0.6: X=(16, 30, 8) y=(16,)
+
+======================================================================
+  RESUMO DA COLETA
+======================================================================
+  Fluxos capturados   : 4
+  Total de janelas    : 176
+    10.0.0.1-10.0.0.5         janelas=  58  mbps_medio= 106.99  mbps_max= 401.43
+    10.0.0.2-10.0.0.6         janelas=  46  mbps_medio= 114.03  mbps_max= 397.29
+    10.0.0.3-10.0.0.7         janelas=  58  mbps_medio=  83.60  mbps_max= 397.84
+    10.0.0.4-10.0.0.8         janelas=  14  mbps_medio= 215.09  mbps_max= 400.95
+======================================================================
 ```
 
 ### Arquivos gerados (`./pcap/`)
 
 ```
 pcap/
-├── h1.pcap ... h8.pcap          ← capturas brutas por host
-├── flows_<run_id>.json          ← fluxos e vazão em JSON
-└── flows_<run_id>.csv           ← mesmo dado em CSV
+├── series_<run_id>.json              ← série temporal completa por fluxo (JSON)
+├── flows_long_<run_id>.csv           ← formato long: uma linha por (timestamp, fluxo)
+├── flows_wide_mbps_<run_id>.csv      ← formato wide: timestamp + 1 coluna por fluxo (mbps)
+├── flows_wide_pps_<run_id>.csv       ← idem, mas com pacotes/segundo
+└── lstm_windows/
+    ├── <fluxo>_X.npy                 ← janelas deslizantes (seq_len, n_features)
+    ├── <fluxo>_y.npy                 ← alvo: mbps do próximo segundo
+    └── metadata_<run_id>.json        ← shapes e features de cada fluxo
 ```
 
-### Reanalisar PCAPs já capturados
+### Formato dos CSVs
 
-Se você já tem arquivos `.pcap` salvos e quer apenas reprocessar o relatório de fluxos sem capturar de novo, crie um arquivo `reanalyze.py` com este conteúdo:
+**`flows_long_<run_id>.csv`** — uma linha por janela e por fluxo, com todas as features:
+```
+timestamp,flow,mbps,pps,avg_pkt,std_pkt,tcp_ratio,udp_ratio,flow_count,active_hosts
+0.0,10.0.0.3-10.0.0.7,21.0264,104.0,25272.2,31587.5,1.0,0.0,2,4
+1.0,10.0.0.3-10.0.0.7,21.0243,100.0,26280.4,31800.1,1.0,0.0,2,4
+```
+
+**`flows_wide_mbps_<run_id>.csv`** — uma coluna por fluxo, pronto para entrada multivariada em LSTM:
+```
+timestamp,10.0.0.1-10.0.0.5,10.0.0.2-10.0.0.6,10.0.0.3-10.0.0.7,10.0.0.4-10.0.0.8
+0.0,21.0233,0.0,21.0264,0.0
+1.0,21.0233,0.0,21.0243,0.0
+```
+
+### Janelas deslizantes para LSTM (`lstm_windows/`)
+
+Cada fluxo com dados suficientes (mais que `seq_len + 1` janelas) gera um par de arrays `.npy`:
 
 ```python
-import sys
-sys.path.insert(0, '/home/beatriz/meus-projetos-p4/metricas')
-from pcap_collector import PcapAnalyzer
-from pathlib import Path
-from datetime import datetime
+import numpy as np
 
-output_dir = Path('./pcap')
-pcap_files = [(f"h{i}", output_dir / f"h{i}.pcap") for i in range(1,9)]
-pcap_files = [(h, p) for h, p in pcap_files if p.exists() and p.stat().st_size > 24]
+X = np.load("pcap/lstm_windows/10_0_0_1_to_10_0_0_5_X.npy")  # shape: (N, 30, 8)
+y = np.load("pcap/lstm_windows/10_0_0_1_to_10_0_0_5_y.npy")  # shape: (N,)
 
-analyzer = PcapAnalyzer(output_dir)
-report = analyzer.analyze_all(pcap_files)
-analyzer.save_report(report, datetime.now().strftime("%Y%m%d_%H%M%S"))
-```
-
-E execute com:
-
-```bash
-sudo ~/miniconda/envs/sdn/bin/python reanalyze.py
+# X[i] = 30 segundos anteriores (8 features cada)
+# y[i] = mbps do segundo seguinte (o que o modelo deve prever)
 ```
 
 ---
@@ -400,7 +439,7 @@ sudo ~/miniconda/envs/sdn/bin/python reanalyze.py
 | Terminal | Função |
 |----------|--------|
 | **Terminal 1** | Ryu (controlador SDN) |
-| **Terminal 3** | Collector (gravação do dataset CSV/JSONL) |
+| **Terminal 3** | Collector (gravação do dataset CSV/JSONL via OpenFlow) |
 | **Terminal 2** | Mininet + geração de tráfego (iperf3) |
 | **Terminal 4** | Telemetria ao vivo (dashboard em tempo real) — opcional |
-| **Terminal 5** | PCAP Collector (captura e análise de fluxo/vazão) — opcional |
+| **Terminal 5** | Captura em tempo real (janelas + features + LSTM windows) — opcional |
