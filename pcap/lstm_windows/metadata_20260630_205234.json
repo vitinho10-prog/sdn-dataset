@@ -1,0 +1,46 @@
+{
+  "run_id": "20260630_205234",
+  "seq_len": 30,
+  "features": [
+    "mbps",
+    "pps",
+    "avg_pkt",
+    "std_pkt",
+    "tcp_ratio",
+    "udp_ratio",
+    "flow_count",
+    "active_hosts"
+  ],
+  "flows": {
+    "10.0.0.1-10.0.0.5": {
+      "shape_X": [
+        64,
+        30,
+        8
+      ],
+      "shape_y": [
+        64
+      ]
+    },
+    "10.0.0.3-10.0.0.7": {
+      "shape_X": [
+        62,
+        30,
+        8
+      ],
+      "shape_y": [
+        62
+      ]
+    },
+    "10.0.0.2-10.0.0.6": {
+      "shape_X": [
+        31,
+        30,
+        8
+      ],
+      "shape_y": [
+        31
+      ]
+    }
+  }
+}
