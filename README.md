@@ -5,6 +5,8 @@ Este projeto implementa um sistema de monitoramento e coleta de métricas em tem
 ## 🚀 Como Funciona
 O sistema coleta estatísticas de portas e links (via OpenFlow/IPC) e calcula métricas dinâmicas, com destaque para o **Growth Rate** (taxa de aceleração da utilização do link), permitindo identificar anomalias antes que o link atinja a saturação total.
 
+O tráfego é gerado por um **Gerador de Cenários** (`scenarios.py` + `run_experiments.py`) que sorteia, a cada experimento, um cenário de um catálogo com 12 padrões diferentes — desde tráfego ocioso até congestionamento severo e falhas de link — garantindo que o dataset final seja rico e variado o suficiente para treinar modelos que generalizem bem.
+
 ---
 
 ## 🛠️ Pré-requisitos e Instalação
@@ -42,17 +44,19 @@ sudo ~/miniconda/envs/sdn/bin/ryu-manager controller.py
 ```
 *Aguarde a mensagem indicando a conexão dos switches (ex: Switch conectado: dpid=7). Deixe este terminal rodando.*
 
-### 📊 Terminal 2 — Coletor de Métricas (Collector)
-Inicia a captura ativa dos dados por um período determinado (300 segundos). **Inicie este terminal logo após o Ryu estar pronto:**
+### 📊 Terminal 3 — Coletor de Métricas (Collector)
+Inicia a captura ativa dos dados por um período determinado. **Inicie este terminal logo após o Ryu estar pronto, e antes do Terminal 2**, para não perder o início dos experimentos:
 ```bash
 conda activate sdn
 cd ~/meus-projetos-p4/metricas
-~/miniconda/envs/sdn/bin/python collector.py --duration 300 --output-dir ./dataset
+~/miniconda/envs/sdn/bin/python collector.py --duration 900 --output-dir ./dataset
 ```
-*Aguarde aparecer a mensagem Collection started. Duration: 300s.*
+*Aguarde aparecer a mensagem Collection started. Duration: 900s.*
 
-### 🏎️ Terminal 3 — Topologia Mininet + Geração de Tráfego Dinâmico
-Limpa instâncias antigas do Open vSwitch, constrói a topologia Spine-Leaf de switches e inicia o roteiro automatizado de injeção de tráfego (Fases 1 a 6) via iperf3. **Inicie este terminal imediatamente após o início da coleta:**
+> **Dica de dimensionamento:** o `--duration` do collector deve ser **maior ou igual** à soma esperada da duração de todos os experimentos que você vai rodar no Terminal 2. Para ~20-30 experimentos, 900 a 1200 segundos costuma ser suficiente.
+
+### 🏎️ Terminal 2 — Gerador de Cenários (Experimentos Aleatórios)
+Limpa instâncias antigas do Open vSwitch, constrói a topologia Fat-tree e executa uma sequência de **N experimentos**, cada um sorteando um cenário aleatório do catálogo (substitui o antigo roteiro fixo de "Fase 1 a 6"):
 ```bash
 conda activate sdn
 cd ~/meus-projetos-p4/metricas
@@ -61,95 +65,75 @@ cd ~/meus-projetos-p4/metricas
 sudo ip link show | grep -oP '\d+: \K(ag|lf|sp|h)[0-9]+-eth[0-9]+(?=@)' | xargs -I{} sudo ip link delete {} 2>/dev/null
 sudo ovs-vsctl list-br 2>/dev/null | xargs -I{} sudo ovs-vsctl del-br {} 2>/dev/null
 
-# Execução do script de tráfego automatizado
-sudo ~/miniconda/envs/sdn/bin/python - << 'EOF'
-import sys
-sys.path.insert(0, '/home/beatriz/meus-projetos-p4/metricas')
-from mininet.net import Mininet
-from mininet.node import RemoteController, OVSSwitch
-from mininet.link import Link
-from mininet.log import setLogLevel
-from mininet.cli import CLI
-import time, random
-
-setLogLevel('warning')
-net = Mininet(controller=None, switch=OVSSwitch, link=Link, autoSetMacs=True)
-net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=6633)
-
-# Criação dos switches (Spine, Aggregation, Leaf)
-sp1 = net.addSwitch('sp1', protocols='OpenFlow13', dpid='0000000000000001')
-ag1 = net.addSwitch('ag1', protocols='OpenFlow13', dpid='0000000000000002')
-ag2 = net.addSwitch('ag2', protocols='OpenFlow13', dpid='0000000000000003')
-lf1 = net.addSwitch('lf1', protocols='OpenFlow13', dpid='0000000000000004')
-lf2 = net.addSwitch('lf2', protocols='OpenFlow13', dpid='0000000000000005')
-lf3 = net.addSwitch('lf3', protocols='OpenFlow13', dpid='0000000000000006')
-lf4 = net.addSwitch('lf4', protocols='OpenFlow13', dpid='0000000000000007')
-
-hosts = [net.addHost('h%d' % i, ip='10.0.0.%d/24' % i) for i in range(1,9)]
-net.addLink(sp1, ag1); net.addLink(sp1, ag2)
-net.addLink(ag1, lf1); net.addLink(ag1, lf2)
-net.addLink(ag2, lf3); net.addLink(ag2, lf4)
-
-for i, lf in enumerate([lf1,lf1,lf2,lf2,lf3,lf3,lf4,lf4]):
-    net.addLink(lf, hosts[i])
-
-net.start()
-
-for h in net.hosts:
-    h.cmd('sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null')
-time.sleep(5)
-
-for h in net.hosts:
-    h.cmd('iperf3 -s -D -p 5201 2>/dev/null')
-    h.cmd('iperf3 -s -D -p 5202 2>/dev/null')
-    h.cmd('iperf3 -s -D -p 5203 2>/dev/null')
-time.sleep(2)
-
-print('=== Fase 1: Tráfego baixo (30s) ===')
-net.get('h1').cmd('iperf3 -c 10.0.0.5 -b 10M -t 30 -p 5201 &')
-net.get('h3').cmd('iperf3 -c 10.0.0.7 -b 10M -t 30 -p 5201 &')
-time.sleep(32)
-
-print('=== Fase 2: Tráfego médio (30s) ===')
-net.get('h1').cmd('iperf3 -c 10.0.0.5 -b 50M -t 30 -p 5201 &')
-net.get('h2').cmd('iperf3 -c 10.0.0.6 -b 40M -t 30 -p 5202 &')
-net.get('h3').cmd('iperf3 -c 10.0.0.7 -b 30M -t 30 -p 5201 &')
-time.sleep(32)
-
-print('=== Fase 3: Congestionamento (30s) ===')
-net.get('h1').cmd('iperf3 -c 10.0.0.5 -b 200M -t 30 -p 5201 &')
-net.get('h2').cmd('iperf3 -c 10.0.0.6 -b 200M -t 30 -p 5202 &')
-net.get('h3').cmd('iperf3 -c 10.0.0.7 -b 200M -t 30 -p 5203 &')
-net.get('h4').cmd('iperf3 -c 10.0.0.8 -b 200M -t 30 -p 5201 &')
-time.sleep(32)
-
-print('=== Fase 4: Idle (20s) ===')
-time.sleep(20)
-
-print('=== Fase 5: Burst variado (60s) ===')
-for _ in range(6):
-    bw = random.randint(20, 150)
-    net.get('h1').cmd('iperf3 -c 10.0.0.5 -b %dM -t 8 -p 5201 &' % bw)
-    net.get('h3').cmd('iperf3 -c 10.0.0.7 -b %dM -t 8 -p 5201 &' % bw)
-    time.sleep(10)
-
-print('=== Fase 6: Congestionamento severo (30s) ===')
-for port in [5201, 5202, 5203]:
-    net.get('h1').cmd('iperf3 -c 10.0.0.5 -b 300M -t 30 -p %d &' % port)
-    net.get('h2').cmd('iperf3 -c 10.0.0.6 -b 300M -t 30 -p %d &' % port)
-time.sleep(32)
-
-print('Tráfego completo!')
-CLI(net)
-net.stop()
-EOF
+# Executa 20 experimentos aleatórios, reprodutíveis via seed
+sudo ~/miniconda/envs/sdn/bin/python run_experiments.py --n-experiments 20 --seed 42
 ```
+
+Parâmetros disponíveis:
+```bash
+--n-experiments   # número de experimentos a executar (padrão: 20)
+--seed            # seed para reprodutibilidade (padrão: aleatório)
+--cooldown        # pausa entre experimentos em segundos (padrão: 3.0)
+--cli             # abre o Mininet CLI ao final da execução
+--manifest        # caminho do CSV de manifesto (padrão: experiments_manifest.csv)
+```
+
+---
+
+## 🎲 Gerador de Cenários — Catálogo e Funcionamento
+
+O `scenarios.py` define um catálogo de **12 cenários** de tráfego, cada um com parâmetros próprios de banda, duração, número de fluxos, mix de protocolos e probabilidade de eventos de rede:
+
+| Cenário | Descrição |
+|---------|-----------|
+| `LOW_LOAD` | Tráfego leve e constante |
+| `MEDIUM_LOAD` | Tráfego moderado, múltiplos fluxos |
+| `HIGH_LOAD` | Tráfego pesado, muitos fluxos simultâneos |
+| `BURST` | Picos curtos e intensos de banda |
+| `IDLE` | Rede quase sem tráfego |
+| `MIX_TCP` | Tráfego majoritariamente TCP |
+| `MIX_UDP` | Tráfego majoritariamente UDP |
+| `ELEPHANT_FLOW` | Poucos fluxos, mas de longa duração e alta banda |
+| `MANY_MICE` | Muitos fluxos pequenos e curtos |
+| `CONGESTION` | Múltiplos fluxos forçados pelo mesmo caminho, saturando o link |
+| `FAILURE` | Inclui eventos de queda de link, delay e packet loss |
+| `BACKGROUND_TRAFFIC` | Apenas tráfego de fundo, sem fluxos principais |
+
+### O que muda a cada experimento
+
+Diferente do roteiro fixo anterior (sempre h1→h5, h3→h7, bandas e durações fixas), cada experimento agora sorteia:
+
+- **Pares de hosts aleatórios** (`random.sample`) — nunca repete sempre os mesmos caminhos
+- **Largura de banda aleatória**, dentro da faixa do cenário sorteado
+- **Duração aleatória** de cada fluxo
+- **Número de fluxos aleatório**
+- **Mix de protocolos**: 60% TCP / 25% UDP / 10% ICMP / 5% misto (configurável por cenário)
+- **Tráfego de fundo contínuo** (2 a 4 fluxos pequenos rodando em paralelo aos fluxos principais)
+- **Eventos de rede**, com probabilidade configurável por cenário:
+  - Queda e recuperação de um link interno (`net.configLinkStatus`)
+  - Host saindo e voltando à rede
+  - Variação de delay e packet loss via `tc netem`
+
+Tudo isso é controlado por uma **seed**, então o mesmo `--seed` sempre reproduz exatamente a mesma sequência de experimentos.
+
+### Manifesto de experimentos
+
+Cada execução gera um `experiments_manifest.csv`, que registra qual cenário estava ativo em cada janela de tempo:
+
+```
+experiment_id,scenario,start_ts,duration_s,seed
+1,HIGH_LOAD,1782951000.123,70.8,7709613
+2,ELEPHANT_FLOW,1782951071.456,101.4,2931776
+3,BACKGROUND_TRAFFIC,1782951180.789,84.0,6594010
+```
+
+Isso permite cruzar, por timestamp, qual cenário gerou cada linha do dataset coletado pelo `collector.py` — útil para analisar como cada tipo de tráfego afeta a utilização e o throughput da rede.
 
 ---
 
 ## 📊 Análise de Dados e Visualização Científica
 
-Após o encerramento do experimento de 300 segundos, você pode analisar e extrair os resultados utilizando as ferramentas integradas. **O sistema detecta e carrega automaticamente a coleta mais recente da pasta.**
+Após o encerramento da coleta, você pode analisar e extrair os resultados utilizando as ferramentas integradas. **O sistema detecta e carrega automaticamente a coleta mais recente da pasta.**
 
 ### 1. Visualizar Resumo de Dados Completos no Terminal
 Para inspecionar rapidamente os picos máximos por link e a variação cronológica do link principal (`dp2:p1`), execute o script abaixo no terminal:
@@ -188,7 +172,35 @@ print(dp2[['tempo_s','utilization','throughput_mbps','growth_rate']].to_string(i
 EOF
 ```
 
-### 2. Gerar Gráficos Científicos de Desempenho
+### 2. Correlacionar Dataset com Cenários (Manifesto)
+Para ver a utilização e throughput médio/máximo por tipo de cenário, cruzando o dataset com o `experiments_manifest.csv`:
+
+```bash
+cd ~/meus-projetos-p4/metricas
+~/miniconda/envs/sdn/bin/python - << 'EOF'
+import pandas as pd
+import glob
+import os
+
+ultimo_csv = max(glob.glob('dataset/run_*.csv'), key=os.path.getctime)
+df = pd.read_csv(ultimo_csv)
+manifest = pd.read_csv('experiments_manifest.csv')
+
+def find_scenario(ts):
+    row = manifest[(manifest['start_ts'] <= ts) &
+                   (manifest['start_ts'] + manifest['duration_s'] >= ts)]
+    return row['scenario'].values[0] if len(row) > 0 else 'unknown'
+
+df['scenario'] = df['timestamp'].apply(find_scenario)
+
+print(f"Dataset: {ultimo_csv}")
+print(f"Rows: {len(df)} | Links: {df['link_id'].nunique()}")
+print("\n=== UTILIZAÇÃO E THROUGHPUT POR CENÁRIO ===")
+print(df.groupby('scenario')[['utilization','throughput_mbps']].agg(['mean','max','count']).round(2))
+EOF
+```
+
+### 3. Gerar Gráficos Científicos de Desempenho
 Para plotar os gráficos de análise temporal detalhada e o comparativo multi-link da sua última execução, use o comando abaixo:
 
 ```bash
@@ -216,17 +228,7 @@ dp2 = dp2[dp2['tempo_s'] >= 0].sort_values('tempo_s')
 fig, axes = plt.subplots(3, 1, figsize=(14, 10))
 fig.suptitle('SDN Dataset — Link dp2:p1 (ag1)\nVariação Temporal das Métricas', fontsize=14, fontweight='bold')
 
-fases = [
-    (0,   35,  '#e8f5e9', 'Fase 1\nBaixo'),
-    (35,  70,  '#fff9c4', 'Fase 2\nMédio'),
-    (70,  105, '#ffccbc', 'Fase 3\nCongestionamento'),
-    (105, 125, '#f3e5f5', 'Fase 4\nIdle'),
-    (125, 185, '#e3f2fd', 'Fase 5\nBurst variado'),
-    (185, 210, '#ffcdd2', 'Fase 6\nCong. severo'),
-]
-
 ax1 = axes[0]
-for inicio, fim, cor, label in fases: ax1.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax1.plot(dp2['tempo_s'], dp2['utilization'], color='#1565C0', linewidth=2)
 ax1.axhline(y=80, color='orange', linestyle='--', alpha=0.7, label='Alerta 80%')
 ax1.axhline(y=100, color='red', linestyle='--', alpha=0.7, label='Saturação 100%')
@@ -237,14 +239,12 @@ ax1.grid(True, alpha=0.3)
 ax1.set_title('Utilização do Link', fontsize=11)
 
 ax2 = axes[1]
-for inicio, fim, cor, label in fases: ax2.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax2.plot(dp2['tempo_s'], dp2['throughput_mbps'], color='#2E7D32', linewidth=2)
 ax2.set_ylabel('Throughput (Mbps)', fontsize=11)
 ax2.grid(True, alpha=0.3)
 ax2.set_title('Throughput', fontsize=11)
 
 ax3 = axes[2]
-for inicio, fim, cor, label in fases: ax3.axvspan(inicio, fim, alpha=0.3, color=cor)
 ax3.plot(dp2['tempo_s'], dp2['growth_rate'], color='#6A1B9A', linewidth=2)
 ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
 ax3.axhline(y=3, color='red', linestyle='--', alpha=0.7, label='Alerta congestionamento')
@@ -254,9 +254,7 @@ ax3.legend(loc='upper left', fontsize=9)
 ax3.grid(True, alpha=0.3)
 ax3.set_title('Taxa de Crescimento da Utilização', fontsize=11)
 
-patches = [mpatches.Patch(color=cor, alpha=0.5, label=label.replace('\n', ' ')) for _, _, cor, label in fases]
-fig.legend(handles=patches, loc='lower center', ncol=6, fontsize=9, bbox_to_anchor=(0.5, -0.02))
-plt.tight_layout(rect=[0, 0.04, 1, 1])
+plt.tight_layout()
 plt.savefig('dataset/grafico_apresentacao.png', dpi=150, bbox_inches='tight')
 
 fig2, ax = plt.subplots(figsize=(12, 6))
@@ -267,7 +265,6 @@ for link, cor in zip(links_principais, cores):
     d['tempo_s'] = (d['timestamp'] - d['timestamp'].min()).round(1)
     d = d[d['tempo_s'] >= 0].sort_values('tempo_s')
     ax.plot(d['tempo_s'], d['utilization'], color=cor, linewidth=2, label=link)
-for inicio, fim, cor, label in fases: ax.axvspan(inicio, fim, alpha=0.15, color=cor)
 ax.set_xlabel('Tempo (segundos)', fontsize=11)
 ax.set_ylabel('Utilização (%)', fontsize=11)
 ax.set_title('SDN Dataset — Utilização por Link ao Longo do Tempo', fontsize=13, fontweight='bold')
@@ -280,7 +277,7 @@ print("Gráficos gerados com sucesso na pasta dataset/")
 EOF
 ```
 
-### 3. Visualizar as Imagens Geradas no Windows (WSL Interop)
+### 4. Visualizar as Imagens Geradas no Windows (WSL Interop)
 Como o ambiente WSL opera via terminal, você pode invocar o Visualizador de Fotos do Windows diretamente utilizando a interoperabilidade do sistema para abrir as imagens salvas:
 
 ```bash
@@ -434,12 +431,26 @@ y = np.load("pcap/lstm_windows/10_0_0_1_to_10_0_0_5_y.npy")  # shape: (N,)
 
 ---
 
+## 📁 Estrutura dos Arquivos Principais
+
+| Arquivo | Função |
+|---------|--------|
+| `controller.py` | Controlador Ryu (OpenFlow 1.3): aprende MACs, encaminha pacotes e coleta PortStats a cada 1s |
+| `topo.py` | Define a topologia Fat-tree base (spine, aggregation, leaf, hosts) |
+| `collector.py` | Recebe métricas do controlador via IPC, calcula utilização/growth rate e grava o dataset (CSV/JSONL + janelas LSTM) |
+| `scenarios.py` | Catálogo de 12 cenários de tráfego + executor de cenários com eventos de rede |
+| `run_experiments.py` | Orquestra N experimentos aleatórios sobre a topologia, gerando o manifesto de execução |
+| `telemetry.py` | Dashboard de telemetria em tempo real no terminal |
+| `pcap_collector.py` | Captura de tráfego em tempo real via tshark, com janelas temporais e features para LSTM |
+
+---
+
 ## 🗂️ Pipeline Completo — Resumo de Todos os Terminais
 
 | Terminal | Função |
 |----------|--------|
 | **Terminal 1** | Ryu (controlador SDN) |
-| **Terminal 3** | Collector (gravação do dataset CSV/JSONL via OpenFlow) |
-| **Terminal 2** | Mininet + geração de tráfego (iperf3) |
+| **Terminal 3** | Collector (gravação do dataset CSV/JSONL via OpenFlow) — inicie antes do Terminal 2 |
+| **Terminal 2** | Gerador de Cenários — Mininet + N experimentos aleatórios (`run_experiments.py`) |
 | **Terminal 4** | Telemetria ao vivo (dashboard em tempo real) — opcional |
 | **Terminal 5** | Captura em tempo real (janelas + features + LSTM windows) — opcional |
